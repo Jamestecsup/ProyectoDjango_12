@@ -18,16 +18,91 @@
 //         ignore a second call while the first one is still in flight (use a ref: a state is too late).
 // Rule of the course: no hook inside an if, a loop or after a return.
 import { createExam, deleteExam, describeError, listExams } from "./api";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export default function useExams() {
+  const [status, setStatus] = useState("loading");
+  const [exams, setExams] = useState([]);
+  const [error, setError] = useState(null);
+  const [actionError, setActionError] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const creatingRef = useRef(false);
+  const removingRef = useRef(new Set());
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let cancelled = false;
+
+    setStatus("loading");
+    setExams([]);
+    setError(null);
+
+    listExams({ signal: controller.signal })
+      .then((data) => {
+        if (cancelled) return;
+        setExams(data);
+        setStatus("ready");
+      })
+      .catch((requestError) => {
+        if (cancelled) return;
+        setExams([]);
+        setError(describeError(requestError));
+        setStatus("error");
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [reloadKey]);
+
+  const reload = useCallback(() => {
+    setReloadKey((current) => current + 1);
+  }, []);
+
+  const remove = useCallback(async (id) => {
+    if (removingRef.current.has(id)) return false;
+    removingRef.current.add(id);
+    setActionError(null);
+    try {
+      await deleteExam(id);
+      setExams((current) => current.filter((exam) => exam.id !== id));
+      return true;
+    } catch (requestError) {
+      setActionError(describeError(requestError));
+      return false;
+    } finally {
+      removingRef.current.delete(id);
+    }
+  }, []);
+
+  const create = useCallback(async (title) => {
+    if (creatingRef.current) return false;
+    creatingRef.current = true;
+    setSaving(true);
+    setActionError(null);
+    try {
+      const created = await createExam(title);
+      setExams((current) => [...current, created]);
+      return true;
+    } catch (requestError) {
+      setActionError(describeError(requestError));
+      return false;
+    } finally {
+      creatingRef.current = false;
+      setSaving(false);
+    }
+  }, []);
+
   return {
-    status: "loading",
-    exams: [],
-    error: null,
-    actionError: null,
-    saving: false,
-    reload: () => {},
-    remove: async () => false,
-    create: async () => false,
+    status,
+    exams,
+    error,
+    actionError,
+    saving,
+    reload,
+    remove,
+    create,
   };
 }
